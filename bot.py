@@ -12,6 +12,20 @@ BASE = "https://botapi.rubika.ir/v3/" + TOKEN
 DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "balances.json")
 START_BALANCE = 100000
 
+GAMES = {
+    "چپ": ("چپ", "راست"),
+    "راست": ("چپ", "راست"),
+    "شیر": ("شیر", "خط"),
+    "خط": ("شیر", "خط"),
+}
+
+UNITS = {
+    "کا": 1_000,
+    "میل": 1_000_000,
+    "بیل": 1_000_000_000,
+    "تیل": 1_000_000_000_000,
+}
+
 app = Flask(__name__)
 
 @app.route("/")
@@ -20,8 +34,11 @@ def home():
 
 def load_balances():
     if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+        try:
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
     return {}
 
 def save_balances(data):
@@ -35,21 +52,27 @@ def get_balance(data, chat_id):
 
 def parse_amount(word):
     word = word.strip()
-    multiplier = 1
-    if word.endswith("کا") or word.endswith("k") or word.endswith("K"):
-        multiplier = 1000
-        word = word[:-2] if word.endswith("کا") else word[:-1]
+    for suffix, mult in UNITS.items():
+        if word.endswith(suffix):
+            number_part = word[: -len(suffix)]
+            try:
+                return int(float(number_part) * mult)
+            except ValueError:
+                return None
     try:
-        return int(float(word) * multiplier)
+        return int(float(word))
     except ValueError:
         return None
 
 def send(chat_id, text):
-    requests.post(BASE + "/sendMessage", json={"chat_id": chat_id, "text": text})
+    try:
+        requests.post(BASE + "/sendMessage", json={"chat_id": chat_id, "text": text}, timeout=10)
+    except Exception as e:
+        print("خطا در ارسال پیام:", e)
 
 def bot_loop():
     balances = load_balances()
-    print("بات روشن شد و منتظر پیامه...")
+    print("بات روشن شد و منتظر پیامه...", flush=True)
     offset_id = None
 
     while True:
@@ -58,7 +81,7 @@ def bot_loop():
             if offset_id:
                 payload["offset_id"] = offset_id
 
-            res = requests.post(BASE + "/getUpdates", json=payload).json()
+            res = requests.post(BASE + "/getUpdates", json=payload, timeout=15).json()
             updates = res.get("data", {}).get("updates", [])
 
             for u in updates:
@@ -69,15 +92,21 @@ def bot_loop():
                 if not chat_id or not text:
                     continue
 
+                print("پیام دریافت شد از", chat_id, ":", text, flush=True)
+
                 parts = text.strip().split()
 
                 if text.strip() in ("/start", "شروع"):
                     bal = get_balance(balances, chat_id)
                     save_balances(balances)
-                    send(chat_id, "به بازی سکه خوش اومدی!\nموجودی فعلی: " + str(bal) + "\n\nبرای شرط‌بندی بنویس:\nراست 5کا\nیا\nچپ 1000")
+                    send(
+                        chat_id,
+                        "به بازی سکه خوش اومدی!\nموجودی فعلی: " + str(bal) +
+                        "\n\nبرای شرط‌بندی بنویس:\nراست 5کا\nچپ 100کا\nشیر 1میل\nخط 1بیل\n\nواحدها: کا=هزار میل=میلیون بیل=میلیارد تیل=تریلیون"
+                    )
                     continue
 
-                if len(parts) == 2 and parts[0] in ("چپ", "راست"):
+                if len(parts) == 2 and parts[0] in GAMES:
                     choice = parts[0]
                     amount = parse_amount(parts[1])
                     bal = get_balance(balances, chat_id)
@@ -90,7 +119,8 @@ def bot_loop():
                         send(chat_id, "موجودی کافی نداری.\nموجودی فعلی: " + str(bal))
                         continue
 
-                    result = random.choice(["چپ", "راست"])
+                    option_a, option_b = GAMES[choice]
+                    result = random.choice([option_a, option_b])
                     win = (result == choice)
 
                     if win:
@@ -105,12 +135,12 @@ def bot_loop():
                     send(chat_id, msg)
                     continue
 
-                send(chat_id, "برای شرط‌بندی بنویس:\nراست 5کا\nیا\nچپ 1000")
+                send(chat_id, "برای شرط‌بندی بنویس:\nراست 5کا / چپ 5کا\nشیر 5کا / خط 5کا\n\nواحدها: کا=هزار میل=میلیون بیل=میلیارد تیل=تریلیون")
 
             time.sleep(3)
 
         except Exception as e:
-            print("خطا:", e)
+            print("خطا:", e, flush=True)
             time.sleep(3)
 
 if __name__ == "__main__":
